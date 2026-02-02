@@ -1,0 +1,2321 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MOMENT. CRM</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        moment: {
+                            orange: '#D3571C',
+                            'orange-dark': '#60270C',
+                            black: '#222222',
+                            blue: '#00B0CA',
+                            'blue-dark': '#13595F',
+                            yellow: '#FEE800',
+                            'yellow-dark': '#8C6000',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Montserrat', 'Calibri', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .kanban-column { min-height: 400px; min-width: 290px; }
+        .kanban-column.drag-over { outline: 2px dashed rgba(211,87,28,0.6); outline-offset: 4px; }
+        .deal-card { cursor: grab; }
+        .deal-card:active { cursor: grabbing; }
+        .nav-item.active { background-color: rgba(255,255,255,0.15); }
+        .modal { display: none; }
+        .modal.active { display: flex; }
+
+        /* === Win/Loss drop zones (chests) === */
+        .outcome-zones { position: fixed; right: 20px; bottom: 18px; display: flex; gap: 12px; z-index: 120; pointer-events: none; }
+        .outcome-zones.active { pointer-events: auto; }
+        .outcome-zone { width: 220px; height: 96px; border-radius: 18px; display:flex; align-items:center; gap:12px; padding: 12px 14px;
+            background: rgba(255,255,255,0.92); border: 1px solid rgba(229,231,235,0.9);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.12);
+            transform: translateY(10px); opacity: 0; transition: opacity .18s ease, transform .18s ease, box-shadow .18s ease;
+        }
+        .outcome-zones.active .outcome-zone { transform: translateY(0); opacity: 1; }
+        .outcome-zone.win { border-color: rgba(245,158,11,0.45); }
+        .outcome-zone.loss { border-color: rgba(107,114,128,0.55); }
+        .outcome-zone .label { font-weight: 800; font-size: 12px; letter-spacing: .02em; color:#111827; }
+        .outcome-zone .hint { font-size: 11px; color:#6B7280; line-height: 1.2; }
+        .outcome-zone.drag-over { outline: 2px dashed rgba(211,87,28,0.75); outline-offset: 3px; }
+        .chest-wrap { width: 64px; height: 64px; border-radius: 16px; display:flex; align-items:center; justify-content:center;
+            background: linear-gradient(180deg, rgba(255,255,255,0.65), rgba(255,255,255,0.2));
+            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.04), 0 12px 28px rgba(0,0,0,0.14);
+            transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+        }
+        .outcome-zone.drag-over .chest-wrap { transform: scale(1.08); filter: saturate(1.2); }
+        .outcome-zone.drag-over.win .chest-wrap { box-shadow: 0 0 0 10px rgba(245,158,11,0.30), 0 18px 42px rgba(0,0,0,0.18); }
+        .outcome-zone.drag-over.loss .chest-wrap { box-shadow: 0 0 0 10px rgba(107,114,128,0.26), 0 18px 42px rgba(0,0,0,0.18); }
+        .chest-svg { width: 46px; height: 46px; }
+
+        /* Outcome modal */
+        .modal-backdrop { position: fixed; inset:0; background: rgba(17,24,39,0.65); z-index: 200; display:none; }
+        .modal-backdrop.show { display:block; }
+        .modal-card { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); width: min(520px, 92vw);
+            background: #fff; border-radius: 18px; box-shadow: 0 22px 80px rgba(0,0,0,0.28); z-index: 201; display:none;
+        }
+        .modal-card.show { display:block; }
+        .modal-card .hd { padding: 18px 18px 10px 18px; border-bottom: 1px solid #E5E7EB; }
+        .modal-card .bd { padding: 14px 18px 16px 18px; }
+        .modal-card .ft { padding: 12px 18px 16px 18px; display:flex; justify-content:flex-end; gap:10px; }
+
+        /* Closed deals drawer */
+        .drawer-backdrop { position: fixed; inset:0; background: rgba(17,24,39,0.55); z-index: 190; display:none; }
+        .drawer-backdrop.show { display:block; }
+        .drawer { position: fixed; right: 0; top: 0; height: 100vh; width: min(560px, 94vw); background: white; z-index: 191;
+            box-shadow: -22px 0 70px rgba(0,0,0,0.22); transform: translateX(102%); transition: transform .22s ease;
+        }
+        .drawer.show { transform: translateX(0); }
+        .drawer .hd { padding: 16px 16px 10px 16px; border-bottom: 1px solid #E5E7EB; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+        .drawer .bd { padding: 12px 16px 16px 16px; overflow:auto; height: calc(100vh - 62px); }
+        .drawer .pill { font-size: 12px; font-weight: 800; padding: 6px 10px; border-radius: 999px; background: #F3F4F6; color:#111827; cursor: pointer; border: 1px solid #E5E7EB; }
+        .drawer .pill.active { background:#111827; color:#fff; border-color:#111827; }
+        .drawer-item { border: 1px solid #E5E7EB; border-radius: 14px; padding: 10px 12px; margin-bottom: 10px; }
+        .drawer-item .t { font-weight: 800; }
+        .drawer-item .m { color:#6B7280; font-size: 12px; margin-top: 2px; }
+        .drawer-item .tag { display:inline-flex; align-items:center; gap:6px; font-size: 11px; font-weight: 800; padding: 4px 8px; border-radius: 999px; margin-top: 8px; }
+        .tag.won { background: rgba(245,158,11,0.15); color: #92400E; }
+        .tag.lost { background: rgba(107,114,128,0.18); color: #374151; }
+
+        /* Fullscreen celebration */
+        .celebration-canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 180; pointer-events:none; display:none; }
+        .money-pop { position: fixed; z-index: 181; font-weight: 900; font-size: 22px; color: #111827;
+            background: rgba(255,255,255,0.88); border: 1px solid rgba(229,231,235,0.9); border-radius: 999px;
+            padding: 8px 12px; transform: translate(-50%, -50%) scale(0.9); opacity: 0;
+            box-shadow: 0 18px 50px rgba(0,0,0,0.22);
+            transition: transform .18s ease, opacity .18s ease;
+        }
+        .money-pop.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+        .money-pop.hide { opacity: 0; transform: translate(-50%, -50%) scale(0.95); }
+
+        .win-burst { position: fixed; inset: 0; pointer-events:none; z-index: 181; }
+        .coin { position: absolute; width: 12px; height: 12px; border-radius: 999px;
+            background: radial-gradient(circle at 30% 30%, #fff8c5, #fbbf24 60%, #92400e 100%);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.18);
+            transform: translate(0,0) scale(1);
+        }
+        .spark { position: absolute; width: 6px; height: 6px; border-radius: 999px;
+            background: radial-gradient(circle at 30% 30%, #ffffff, rgba(255,255,255,0.2));
+            box-shadow: 0 0 18px rgba(255,255,255,0.9);
+        }
+        @keyframes coinPop { to { transform: translate(var(--dx), var(--dy)) scale(0.7); opacity: 0; } }
+        @keyframes sparkPop { to { transform: translate(var(--dx), var(--dy)) scale(0.2); opacity: 0; } }
+
+
+        /* === Money rain overlay (fullscreen) === */
+        #moneyRainOverlay{position:fixed;inset:0;pointer-events:none;z-index:2000000;overflow:hidden}
+        .moneyDrop{position:absolute;top:-16vh;font-size:64px;opacity:.98;animation:moneyFall linear forwards;filter:drop-shadow(0 4px 6px rgba(0,0,0,.35));font-family:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif}
+        @keyframes moneyFall{to{transform:translate(var(--dx,0px), 125vh) rotate(720deg);opacity:.98}}
+
+        /* === Micro feedback: subtle forward move === */
+        .deal-forward-pop {
+            animation: dealPop 240ms ease-out;
+            box-shadow: 0 0 0 2px rgba(211,87,28,0.35), 0 10px 28px rgba(0,0,0,0.18);
+        }
+        @keyframes dealPop {
+            0%   { transform: scale(1); }
+            45%  { transform: scale(1.025); }
+            100% { transform: scale(1); }
+        }
+        #microFxLayer {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 170;
+        }
+        .microSpark {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: radial-gradient(circle, #FFD166 0%, #F59E0B 55%, rgba(245,158,11,0) 70%);
+            opacity: .95;
+            transform: translate(-50%, -50%);
+            animation: sparkFly 520ms ease-out forwards;
+        }
+        @keyframes sparkFly {
+            to {
+                transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(0.7);
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen font-sans">
+
+    <!-- LOGIN SCREEN -->
+    <div id="login-screen" class="min-h-screen flex items-center justify-center bg-gray-100">
+        <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
+            <div class="text-center mb-6">
+                <div class="w-16 h-16 bg-moment-orange rounded-xl flex items-center justify-center mx-auto mb-4">
+                    <span class="text-white font-bold text-2xl">M.</span>
+                </div>
+                <h1 class="text-2xl font-bold text-moment-black">MOMENT. CRM</h1>
+                <p class="text-gray-500 mt-1">Logga in för att fortsätta</p>
+            </div>
+
+            <div id="login-form-container">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">E-post</label>
+                        <input type="email" id="login-email" class="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-moment-orange focus:outline-none" placeholder="din@email.se" onkeypress="if(event.key==='Enter')document.getElementById('login-password').focus()">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-1">Lösenord</label>
+                        <input type="password" id="login-password" class="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-moment-orange focus:outline-none" placeholder="••••••••" onkeypress="if(event.key==='Enter')handleLogin()">
+                    </div>
+                    <div id="login-error" class="hidden text-red-600 text-sm"></div>
+                    <button onclick="handleLogin()" class="w-full bg-moment-orange hover:bg-moment-orange-dark text-white py-3 rounded-lg font-medium transition">Logga in</button>
+                </div>
+                <div class="mt-4 text-center">
+                    <button onclick="showRegister()" class="text-moment-orange hover:underline text-sm">Inget konto? Registrera dig</button>
+                </div>
+            </div>
+
+            <div id="register-form-container" class="hidden">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">E-post</label>
+                        <input type="email" id="register-email" class="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-moment-orange focus:outline-none" placeholder="din@email.se" onkeypress="if(event.key==='Enter')document.getElementById('register-password').focus()">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-1">Lösenord (minst 6 tecken)</label>
+                        <input type="password" id="register-password" class="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-moment-orange focus:outline-none" placeholder="••••••••" onkeypress="if(event.key==='Enter')handleRegister()">
+                    </div>
+                    <div id="register-error" class="hidden text-red-600 text-sm"></div>
+                    <div id="register-success" class="hidden text-green-600 text-sm"></div>
+                    <button onclick="handleRegister()" class="w-full bg-moment-orange hover:bg-moment-orange-dark text-white py-3 rounded-lg font-medium transition">Skapa konto</button>
+                </div>
+                <div class="mt-4 text-center">
+                    <button onclick="showLogin()" class="text-moment-orange hover:underline text-sm">Har redan konto? Logga in</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN APP (hidden until logged in) -->
+    <div id="app-container" class="hidden">
+
+    <nav class="bg-moment-black text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center space-x-8">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-9 h-9 bg-moment-orange rounded flex items-center justify-center">
+                            <span class="text-white font-bold text-lg">M.</span>
+                        </div>
+                        <span class="text-lg font-bold tracking-wide">MOMENT.</span>
+                        <span class="ml-3 text-xs opacity-60">build 2026-02-02</span>
+                    </div>
+                    <div class="hidden md:flex space-x-1">
+                        <button id="nav-pipeline" class="nav-item active px-4 py-2 rounded-lg hover:bg-white/10 transition">Pipeline</button>
+                        <button id="nav-companies" class="nav-item px-4 py-2 rounded-lg hover:bg-white/10 transition">Företag</button>
+                        <button id="nav-contacts" class="nav-item px-4 py-2 rounded-lg hover:bg-white/10 transition">Kontakter</button>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button id="import-btn" class="bg-moment-orange hover:bg-moment-orange-dark px-4 py-2 rounded-lg text-sm font-medium transition">Importera</button>
+                    <div class="flex items-center gap-2 pl-3 border-l border-white/20">
+                        <span id="user-email" class="text-sm opacity-75"></span>
+                        <button onclick="handleLogout()" class="text-sm opacity-75 hover:opacity-100 hover:underline">Logga ut</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-4 py-6">
+        <!-- Pipeline -->
+        <div id="pipeline-view">
+            <div class="flex flex-col gap-3 mb-6">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <h2 class="text-2xl font-bold text-moment-black">Pipeline</h2>
+                        <span id="pipeline-count" class="text-sm text-gray-600"></span>
+                    </div>
+                    <button id="new-deal-btn" class="bg-moment-orange hover:bg-moment-orange-dark text-white px-4 py-2 rounded-lg font-medium transition">+ Ny affär</button>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <select id="pipeline-select" class="px-3 py-2 border rounded-lg bg-white text-sm"></select>
+                    <select id="pipeline-filter" class="px-3 py-2 border rounded-lg bg-white text-sm">
+                        <option value="open">Alla öppna</option>
+                    </select>
+                    <select id="pipeline-sort" class="px-3 py-2 border rounded-lg bg-white text-sm">
+                        <option value="updated_desc">Sortera: Senast uppdaterad</option>
+                        <option value="value_desc">Sortera: Värde (högst)</option>
+                        <option value="value_asc">Sortera: Värde (lägst)</option>
+                        <option value="name_asc">Sortera: Namn (A-Ö)</option>
+                    </select>
+                    <div class="ml-auto flex items-center gap-3">
+                        <button class="px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-extrabold text-gray-900 hover:bg-gray-50 transition" onclick="openClosedDeals()">Avslutade affärer</button>
+                        <div class="text-sm text-gray-700">Öppet: <span id="sum-open" class="font-semibold"></span></div>
+                        <div class="text-sm text-gray-700">Forecast: <span id="sum-forecast" class="font-semibold"></span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Win/Loss drop zones -->
+            <div id="outcome-zones" class="outcome-zones" aria-hidden="true">
+                <div id="win-zone" class="outcome-zone win" ondragover="onDragOverOutcome(event)" ondragleave="onDragLeaveOutcome(event)" ondrop="onDropOutcome(event,'won')">
+                    <div class="chest-wrap" title="Vunnen">
+                        <svg class="chest-svg" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 26c0-6 5-11 11-11h18c6 0 11 5 11 11v6H12v-6z" fill="#FDE68A"/>
+                            <path d="M10 30h44v22c0 5-4 10-10 10H20c-6 0-10-5-10-10V30z" fill="#FBBF24"/>
+                            <path d="M10 30h44v6H10v-6z" fill="#F59E0B"/>
+                            <path d="M30 30h4v32h-4V30z" fill="#92400E" opacity=".55"/>
+                            <path d="M24 14h16c6 0 11 5 11 11v1H13v-1c0-6 5-11 11-11z" fill="#FEF3C7"/>
+                            <path d="M28 38h8v8c0 2-2 4-4 4s-4-2-4-4v-8z" fill="#92400E"/>
+                            <circle cx="32" cy="42" r="2" fill="#FDE68A"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="label">Vunnen</div>
+                        <div class="hint">Dra hit för att stänga som vunnen</div>
+                    </div>
+                </div>
+                <div id="loss-zone" class="outcome-zone loss" ondragover="onDragOverOutcome(event)" ondragleave="onDragLeaveOutcome(event)" ondrop="onDropOutcome(event,'lost')">
+                    <div class="chest-wrap" title="Förlorad">
+                        <svg class="chest-svg" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 26c0-6 5-11 11-11h18c6 0 11 5 11 11v6H12v-6z" fill="#E5E7EB"/>
+                            <path d="M10 30h44v22c0 5-4 10-10 10H20c-6 0-10-5-10-10V30z" fill="#9CA3AF"/>
+                            <path d="M10 30h44v6H10v-6z" fill="#6B7280"/>
+                            <path d="M30 30h4v32h-4V30z" fill="#111827" opacity=".35"/>
+                            <path d="M24 14h16c6 0 11 5 11 11v1H13v-1c0-6 5-11 11-11z" fill="#F3F4F6"/>
+                            <path d="M28 38h8v8c0 2-2 4-4 4s-4-2-4-4v-8z" fill="#111827" opacity=".55"/>
+                            <circle cx="32" cy="42" r="2" fill="#E5E7EB"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="label">Förlorad</div>
+                        <div class="hint">Dra hit för att stänga som förlorad</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="pipeline-board" class="flex gap-4 overflow-x-auto pb-2"></div>
+        </div>
+
+        <!-- Companies -->
+        <div id="companies-view" class="hidden">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-moment-black">Företag</h2>
+                <button id="new-company-btn" class="bg-moment-orange hover:bg-moment-orange-dark text-white px-4 py-2 rounded-lg font-medium transition">+ Nytt företag</button>
+            </div>
+            <div class="mb-4">
+                <input type="text" id="company-search" placeholder="Sök företag..." class="w-full md:w-80 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-moment-orange" oninput="filterCompanies()">
+            </div>
+            <div id="companies-list" class="bg-white rounded-xl shadow p-4"></div>
+        </div>
+
+        <!-- Contacts -->
+        <div id="contacts-view" class="hidden">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-moment-black">Kontakter</h2>
+                <button id="new-contact-btn" class="bg-moment-orange hover:bg-moment-orange-dark text-white px-4 py-2 rounded-lg">+ Ny kontakt</button>
+            </div>
+            <div class="mb-4">
+                <input type="text" id="contact-search" placeholder="Sök kontakter..." class="w-full md:w-80 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-moment-orange" oninput="filterContacts()">
+            </div>
+            <div id="contacts-list" class="bg-white rounded-xl shadow p-4"></div>
+        </div>
+    </main>
+
+    <!-- Company Detail Drawer -->
+    <div id="company-drawer" class="fixed inset-0 z-50 hidden">
+        <div class="absolute inset-0 bg-black/40" onclick="closeCompanyDrawer()"></div>
+        <div class="absolute right-0 top-0 h-full w-full max-w-3xl bg-white shadow-2xl flex flex-col">
+            <div class="p-6 border-b flex items-start justify-between gap-4">
+                <div>
+                    <div class="text-xs uppercase tracking-wide text-gray-500">Företag</div>
+                    <h3 id="company-drawer-title" class="text-2xl font-bold text-moment-black">—</h3>
+                    <div id="company-drawer-meta" class="text-sm text-gray-600 mt-1"></div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button id="company-drawer-new-deal" class="px-3 py-2 rounded-lg bg-moment-orange hover:bg-moment-orange-dark text-white text-sm font-medium">+ Ny affär</button>
+                    <button id="company-drawer-new-contact" class="px-3 py-2 rounded-lg border text-sm font-medium">+ Ny kontakt</button>
+                    <button id="company-drawer-edit" class="px-3 py-2 rounded-lg border text-sm font-medium">Redigera</button>
+                    <button class="text-gray-500 text-2xl leading-none" onclick="closeCompanyDrawer()">&times;</button>
+                </div>
+            </div>
+            <div class="px-6 pt-4">
+                <div class="flex gap-2">
+                    <button class="company-tab px-3 py-2 rounded-lg border text-sm font-medium" data-tab="overview">Översikt</button>
+                    <button class="company-tab px-3 py-2 rounded-lg border text-sm font-medium" data-tab="deals">Affärer</button>
+                    <button class="company-tab px-3 py-2 rounded-lg border text-sm font-medium" data-tab="contacts">Kontakter</button>
+                </div>
+            </div>
+            <div class="p-6 overflow-auto flex-1">
+                <div id="company-tab-overview" class="company-tabpanel"></div>
+                <div id="company-tab-deals" class="company-tabpanel hidden"></div>
+                <div id="company-tab-contacts" class="company-tabpanel hidden"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contact Modal -->
+    <div id="contact-modal" class="modal fixed inset-0 bg-black bg-opacity-50 items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 id="contact-modal-title" class="text-xl font-bold">Ny kontakt</h3>
+                    <button id="close-contact-modal" class="text-gray-500 text-2xl">&times;</button>
+                </div>
+                <form id="contact-form">
+                    <input type="hidden" id="contact-id">
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium mb-1">Namn</label>
+                            <input id="contact-name" type="text" required class="w-full border rounded-lg px-3 py-2">
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium mb-1">E-post</label>
+                                <input id="contact-email" type="email" class="w-full border rounded-lg px-3 py-2">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium mb-1">Telefon</label>
+                                <input id="contact-phone" type="text" class="w-full border rounded-lg px-3 py-2">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-1">Företag</label>
+                            <select id="contact-company" class="w-full border rounded-lg px-3 py-2">
+                                <option value="">—</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex justify-between items-center mt-6">
+                        <button type="button" id="delete-contact-btn" class="hidden text-red-600 hover:text-red-700 font-medium">Ta bort</button>
+                        <div class="flex gap-2">
+                            <button type="button" id="cancel-contact-btn" class="px-4 py-2 rounded-lg border">Avbryt</button>
+                            <button type="submit" class="px-4 py-2 rounded-lg bg-moment-orange hover:bg-moment-orange-dark text-white font-medium">Spara</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Deal Modal -->
+    <div id="deal-modal" class="modal fixed inset-0 bg-black bg-opacity-50 items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-screen overflow-y-auto">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 id="deal-modal-title" class="text-xl font-bold">Ny affär</h3>
+                    <button id="close-deal-modal" class="text-gray-500 text-2xl">&times;</button>
+                </div>
+                <form id="deal-form">
+                    <input type="hidden" id="deal-id">
+                    <div class="mb-3"><label class="block text-sm font-medium mb-1">Affärsnamn *</label><input type="text" id="deal-name" required class="w-full px-3 py-2 border rounded"></div>
+                    <div class="mb-3"><label class="block text-sm font-medium mb-1">Företag</label><select id="deal-company" class="w-full px-3 py-2 border rounded"></select></div>
+                    <div class="mb-3"><label class="block text-sm font-medium mb-1">Värde (kr)</label><input type="number" id="deal-value" class="w-full px-3 py-2 border rounded"></div>
+                    <div class="mb-3">
+                        <label class="block text-sm font-medium mb-1">Fas (pipeline)</label>
+                        <select id="deal-stage" class="w-full px-3 py-2 border rounded"></select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="block text-sm font-medium mb-1">Sannolikhet (%)</label>
+                        <input type="number" id="deal-probability" min="0" max="100" class="w-full px-3 py-2 border rounded" placeholder="Lämna tomt för default per fas">
+                    </div>
+                    <div class="mb-3"><label class="block text-sm font-medium mb-1">Status</label>
+                        <select id="deal-status" class="w-full px-3 py-2 border rounded">
+                            <option value="pagaende">Pågående</option>
+                            <option value="won">Vunnen</option>
+                            <option value="lost">Förlorad</option>
+                        </select>
+                    </div>
+                    <div id="outcome-fields" class="hidden border rounded-lg p-3 bg-gray-50">
+                        <div class="mb-3">
+                            <label id="outcome-reason-label" class="block text-sm font-medium mb-1">Förlustorsak</label>
+                            <select id="deal-outcome-reason" class="w-full px-3 py-2 border rounded bg-white">
+                                <option value="">Välj...</option>
+                                <option value="price">Pris</option>
+                                <option value="timing">Timing</option>
+                                <option value="no_budget">Ingen budget</option>
+                                <option value="no_fit">Inte rätt match</option>
+                                <option value="competitor">Valde annan leverantör</option>
+                                <option value="internal">Löste internt</option>
+                                <option value="other">Annat</option>
+                            </select>
+                        </div>
+                        <div class="mb-1">
+                            <label class="block text-sm font-medium mb-1">Anteckning</label>
+                            <textarea id="deal-outcome-notes" rows="3" class="w-full px-3 py-2 border rounded" placeholder="Kort notering..."></textarea>
+                        </div>
+                    </div>
+                    <div class="flex space-x-2 mt-4">
+                        <button type="submit" class="flex-1 bg-moment-orange hover:bg-moment-orange-dark text-white py-2 rounded">Spara</button>
+                        <button type="button" id="cancel-deal" class="flex-1 bg-gray-300 py-2 rounded">Avbryt</button>
+                    </div>
+                </form>
+                <button id="delete-deal-btn" class="hidden w-full mt-2 bg-red-500 text-white py-2 rounded">Ta bort</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Company Modal -->
+    <div id="company-modal" class="modal fixed inset-0 bg-black bg-opacity-50 items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 id="company-modal-title" class="text-xl font-bold">Nytt företag</h3>
+                    <button id="close-company-modal" class="text-gray-500 text-2xl">&times;</button>
+                </div>
+                <form id="company-form">
+                    <input type="hidden" id="company-id">
+                    <div class="mb-3"><label class="block text-sm font-medium mb-1">Företagsnamn *</label><input type="text" id="company-name" required class="w-full px-3 py-2 border rounded"></div>
+                    <div class="mb-3"><label class="block text-sm font-medium mb-1">Org.nr</label><input type="text" id="company-org" class="w-full px-3 py-2 border rounded"></div>
+                    <div class="flex space-x-2 mt-4">
+                        <button type="submit" class="flex-1 bg-moment-orange hover:bg-moment-orange-dark text-white py-2 rounded">Spara</button>
+                        <button type="button" id="cancel-company" class="flex-1 bg-gray-300 py-2 rounded">Avbryt</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Modal -->
+    <div id="import-modal" class="modal fixed inset-0 bg-black bg-opacity-50 items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-bold">Importera från Pipedrive</h3>
+                    <button id="close-import-modal" class="text-gray-500 text-2xl">&times;</button>
+                </div>
+                <div class="space-y-4">
+                    <div class="bg-orange-50 border-l-4 border-moment-orange p-3 rounded text-sm">
+                        <p><strong>Exportera från Pipedrive:</strong></p>
+                        <p>Deals/Organizations → ... → Export → CSV</p>
+                    </div>
+                    <div><label class="block font-medium mb-1">Företag (CSV)</label><input type="file" id="import-companies-file" accept=".csv" class="w-full border rounded p-2"></div>
+                    <div><label class="block font-medium mb-1">Affärer (CSV)</label><input type="file" id="import-deals-file" accept=".csv" class="w-full border rounded p-2"></div>
+                    <div><label class="block font-medium mb-1">Kontakter / Persons (CSV)</label><input type="file" id="import-contacts-file" accept=".csv" class="w-full border rounded p-2"></div>
+                    <div id="import-log" class="hidden bg-gray-100 p-3 rounded text-sm font-mono"></div>
+                    <button id="start-import" class="w-full bg-moment-orange hover:bg-moment-orange-dark text-white py-2 rounded font-medium transition">Starta import</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading" class="hidden fixed inset-0 bg-black bg-opacity-50 items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-xl text-center">
+            <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-moment-orange mx-auto"></div>
+            <p class="mt-3">Laddar...</p>
+        </div>
+    </div>
+
+    <div id="debug" class="fixed bottom-0 left-0 bg-gray-800 text-gray-200 p-2 text-xs rounded-tr opacity-75 whitespace-pre-line"></div>
+    <div id="toast" class="fixed top-4 right-4 z-[1000000] space-y-2"></div>
+
+    <!-- Outcome modal -->
+    <div id="modal-backdrop" class="modal-backdrop"></div>
+    <div id="outcome-modal" class="modal-card" role="dialog" aria-modal="true" aria-labelledby="outcome-title">
+        <div class="hd">
+            <div class="text-lg font-extrabold" id="outcome-title">Markera</div>
+            <div class="text-sm text-gray-600" id="outcome-dealname"></div>
+        </div>
+        <div class="bd">
+            <label class="block text-xs font-extrabold text-gray-700 mb-1">Orsak</label>
+            <select id="outcome-reason" class="w-full px-3 py-2 border rounded-lg bg-white">
+                <option value="">Välj…</option>
+                <option value="price">Pris / budget</option>
+                <option value="timing">Timing</option>
+                <option value="competition">Konkurrent</option>
+                <option value="scope">Scope / match</option>
+                <option value="relationship">Relation / förtroende</option>
+                <option value="other">Övrigt</option>
+            </select>
+            <label class="block text-xs font-extrabold text-gray-700 mt-3 mb-1">Anteckning</label>
+            <textarea id="outcome-notes" rows="3" class="w-full px-3 py-2 border rounded-lg" placeholder="Kort notering..."></textarea>
+        </div>
+        <div class="ft">
+            <button class="px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-extrabold text-gray-900 hover:bg-gray-50 transition" onclick="cancelOutcomeModal()">Avbryt</button>
+            <button class="px-3 py-2 rounded-xl bg-gray-900 text-xs font-extrabold text-white hover:bg-black transition" onclick="saveOutcomeModal()">Spara</button>
+        </div>
+    </div>
+
+    <!-- Closed deals drawer -->
+    <div id="drawer-backdrop" class="drawer-backdrop" onclick="closeClosedDeals()"></div>
+    <div id="closed-drawer" class="drawer" aria-hidden="true">
+        <div class="hd">
+            <div>
+                <div class="text-lg font-extrabold">Avslutade affärer</div>
+                <div class="text-xs text-gray-600">Vunna och förlorade</div>
+            </div>
+            <button class="px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-extrabold text-gray-900 hover:bg-gray-50 transition" onclick="closeClosedDeals()">Stäng</button>
+        </div>
+        <div class="bd">
+            <div class="flex items-center gap-2 mb-3">
+                <input id="closed-search" class="flex-1 px-3 py-2 border rounded-xl" placeholder="Sök..." oninput="renderClosedDeals()"/>
+                <span id="pill-all" class="pill active" onclick="setClosedFilter('all')">Alla</span>
+                <span id="pill-won" class="pill" onclick="setClosedFilter('won')">Vunna</span>
+                <span id="pill-lost" class="pill" onclick="setClosedFilter('lost')">Förlorade</span>
+            </div>
+            <div id="closed-list"></div>
+        </div>
+    </div>
+
+    <!-- Fullscreen celebration canvas -->
+    <canvas id="celebration-canvas" class="celebration-canvas"></canvas>
+
+    </div><!-- /app-container -->
+
+    <script>
+    (function() {
+        'use strict';
+
+        // =====================
+        // Debug & Toast
+        // =====================
+        function debug(msg) {
+            try {
+                var el = document.getElementById('debug');
+                if (!el) return;
+                var ts = new Date().toLocaleTimeString();
+                var line = '[' + ts + '] ' + msg;
+                var prev = el.dataset.lines ? JSON.parse(el.dataset.lines) : [];
+                prev.push(line);
+                while (prev.length > 12) prev.shift();
+                el.dataset.lines = JSON.stringify(prev);
+                el.textContent = prev.join('\n');
+            } catch (e) {}
+        }
+
+        function showToast(message, kind) {
+            try {
+                var host = document.getElementById('toast');
+                if (!host) return;
+                var el = document.createElement('div');
+                el.className = 'px-4 py-3 rounded-xl shadow-lg text-sm font-medium ' +
+                    (kind === 'error' ? 'bg-red-600 text-white' :
+                    (kind === 'success' ? 'bg-emerald-600 text-white' : 'bg-gray-900 text-white'));
+                el.textContent = message;
+                host.appendChild(el);
+                setTimeout(function() { el.style.opacity = '0'; el.style.transform = 'translateY(-6px)'; el.style.transition = 'all .35s'; }, 2200);
+                setTimeout(function() { try { el.remove(); } catch (e) {} }, 2700);
+            } catch (e) {}
+        }
+
+        debug('Script startar...');
+
+        // =====================
+        // Supabase
+        // =====================
+        var SUPABASE_URL = 'https://gfcobolclqjgiddremuj.supabase.co';
+        var SUPABASE_KEY = 'sb_publishable_5m3B7PVlhdHztzf2_9qTRA_9UayNRDJ';
+        var supabase;
+
+        try {
+            supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+            debug('Supabase OK');
+        } catch (e) {
+            debug('Supabase FEL: ' + e.message);
+        }
+
+        // =====================
+        // Auth
+        // =====================
+        var currentUser = null;
+
+        function showLoginScreen() {
+            document.getElementById('login-screen').classList.remove('hidden');
+            document.getElementById('app-container').classList.add('hidden');
+        }
+
+        function showApp() {
+            document.getElementById('login-screen').classList.add('hidden');
+            document.getElementById('app-container').classList.remove('hidden');
+        }
+
+        window.showRegister = function() {
+            document.getElementById('login-form-container').classList.add('hidden');
+            document.getElementById('register-form-container').classList.remove('hidden');
+            document.getElementById('register-error').classList.add('hidden');
+            document.getElementById('register-success').classList.add('hidden');
+        };
+
+        window.showLogin = function() {
+            document.getElementById('register-form-container').classList.add('hidden');
+            document.getElementById('login-form-container').classList.remove('hidden');
+            document.getElementById('login-error').classList.add('hidden');
+        };
+
+        window.handleLogin = async function() {
+            var email = document.getElementById('login-email').value.trim();
+            var password = document.getElementById('login-password').value;
+            var errorEl = document.getElementById('login-error');
+
+            if (!email || !password) {
+                errorEl.textContent = 'Fyll i e-post och lösenord';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+
+            try {
+                var result = await supabase.auth.signInWithPassword({ email: email, password: password });
+                if (result.error) throw result.error;
+                // Auth state change will handle the rest
+            } catch (e) {
+                errorEl.textContent = e.message === 'Invalid login credentials'
+                    ? 'Fel e-post eller lösenord'
+                    : (e.message || 'Inloggning misslyckades');
+                errorEl.classList.remove('hidden');
+            }
+        };
+
+        window.handleRegister = async function() {
+            var email = document.getElementById('register-email').value.trim();
+            var password = document.getElementById('register-password').value;
+            var errorEl = document.getElementById('register-error');
+            var successEl = document.getElementById('register-success');
+
+            errorEl.classList.add('hidden');
+            successEl.classList.add('hidden');
+
+            if (!email || !password) {
+                errorEl.textContent = 'Fyll i e-post och lösenord';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+
+            if (password.length < 6) {
+                errorEl.textContent = 'Lösenordet måste vara minst 6 tecken';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+
+            try {
+                var result = await supabase.auth.signUp({ email: email, password: password });
+                if (result.error) throw result.error;
+
+                successEl.textContent = 'Konto skapat! Kolla din e-post för verifieringslänk, eller logga in direkt.';
+                successEl.classList.remove('hidden');
+            } catch (e) {
+                errorEl.textContent = e.message || 'Registrering misslyckades';
+                errorEl.classList.remove('hidden');
+            }
+        };
+
+        window.handleLogout = async function() {
+            try {
+                await supabase.auth.signOut();
+                showLoginScreen();
+                showToast('Du har loggat ut', 'success');
+            } catch (e) {
+                showToast('Kunde inte logga ut: ' + e.message, 'error');
+            }
+        };
+
+        async function checkAuth() {
+            try {
+                var result = await supabase.auth.getSession();
+                if (result.data.session) {
+                    currentUser = result.data.session.user;
+                    document.getElementById('user-email').textContent = currentUser.email;
+                    showApp();
+                    initApp();
+                } else {
+                    showLoginScreen();
+                }
+            } catch (e) {
+                debug('Auth check failed: ' + e.message);
+                showLoginScreen();
+            }
+        }
+
+        // Listen for auth changes
+        supabase.auth.onAuthStateChange(function(event, session) {
+            debug('Auth event: ' + event);
+            if (event === 'SIGNED_IN' && session) {
+                currentUser = session.user;
+                document.getElementById('user-email').textContent = currentUser.email;
+                showApp();
+                initApp();
+            } else if (event === 'SIGNED_OUT') {
+                currentUser = null;
+                showLoginScreen();
+            }
+        });
+
+        // =====================
+        // Data
+        // =====================
+        var companies = [];
+        var deals = [];
+        var contacts = [];
+        var pipelines = [];
+        var stages = [];
+        var stagesByPipeline = {};
+        var selectedPipelineId = null;
+        var selectedPipelineName = 'Moment';
+        var closedDealsCache = [];
+        var closedFilter = 'all';
+
+        var STAGE_FALLBACK = [
+            { key: 'Bubblare', order: 10, color: 'bg-gray-100 border-l-4 border-gray-500', default_probability: 35 },
+            { key: 'Prospekt', order: 20, color: 'bg-gray-100 border-l-4 border-moment-orange', default_probability: 50 },
+            { key: 'Konsult presenterad', order: 30, color: 'bg-gray-100 border-l-4 border-moment-blue', default_probability: 70 },
+            { key: 'Intervju/presentation genomförd', order: 40, color: 'bg-gray-100 border-l-4 border-moment-yellow', default_probability: 80 }
+        ];
+
+        // =====================
+        // Helpers
+        // =====================
+        function showLoading() {
+            var el = document.getElementById('loading');
+            if (el) { el.classList.remove('hidden'); el.classList.add('flex'); }
+        }
+
+        function hideLoading() {
+            var el = document.getElementById('loading');
+            if (el) { el.classList.add('hidden'); el.classList.remove('flex'); }
+        }
+
+        function escapeHtml(str) {
+            return String(str || '').replace(/[&<>"']/g, function (m) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m];
+            });
+        }
+
+        function formatMoney(n) {
+            return n ? n.toLocaleString('sv-SE') + ' kr' : '-';
+        }
+
+        function slugify(str) {
+            return (str || '').toString().toLowerCase()
+                .replace(/å/g, 'a').replace(/ä/g, 'a').replace(/ö/g, 'o')
+                .replace(/[^a-z0-9]+/g, '_')
+                .replace(/^_+|_+$/g, '');
+        }
+
+        // FIX: Lägg till saknad funktion
+        function populateCompanySelect(selectId, selectedId) {
+            var sel = document.getElementById(selectId);
+            if (!sel) return;
+            sel.innerHTML = '<option value="">Välj företag...</option>';
+            companies.forEach(function(c) {
+                var opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.name;
+                if (selectedId && String(c.id) === String(selectedId)) opt.selected = true;
+                sel.appendChild(opt);
+            });
+        }
+
+        function updateCompanySelect() {
+            populateCompanySelect('deal-company', '');
+        }
+
+        function updateContactCompanySelect(selectedId) {
+            populateCompanySelect('contact-company', selectedId);
+        }
+
+        // =====================
+        // Navigation
+        // =====================
+        function showView(name) {
+            debug('Visar: ' + name);
+            document.getElementById('pipeline-view').classList.add('hidden');
+            document.getElementById('companies-view').classList.add('hidden');
+            document.getElementById('contacts-view').classList.add('hidden');
+            document.getElementById(name + '-view').classList.remove('hidden');
+
+            document.querySelectorAll('.nav-item').forEach(function(b) { b.classList.remove('active'); });
+            var navBtn = document.getElementById('nav-' + name);
+            if (navBtn) navBtn.classList.add('active');
+
+            if (name === 'companies') loadCompanies();
+            if (name === 'contacts') loadContacts();
+        }
+
+        document.getElementById('nav-pipeline').onclick = function() { showView('pipeline'); };
+        document.getElementById('nav-companies').onclick = function() { showView('companies'); };
+        document.getElementById('nav-contacts').onclick = function() { showView('contacts'); };
+
+        // =====================
+        // Companies
+        // =====================
+        async function loadCompanies() {
+            debug('Laddar företag...');
+            try {
+                var result = await supabase.from('companies').select('*').order('name');
+                if (result.error) throw result.error;
+                companies = result.data || [];
+                debug('Laddade ' + companies.length + ' företag');
+                renderCompanies();
+            } catch (e) {
+                debug('Fel ladda företag: ' + e.message);
+            }
+        }
+
+        function renderCompanies() {
+            var searchInput = document.getElementById('company-search');
+            var query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+
+            var filtered = companies.filter(function(c) {
+                if (!query) return true;
+                var name = (c.name || '').toLowerCase();
+                var org = (c.org_number || '').toLowerCase();
+                return name.includes(query) || org.includes(query);
+            });
+
+            var html = '';
+            if (companies.length === 0) {
+                html = '<p class="text-gray-500">Inga företag ännu</p>';
+            } else if (filtered.length === 0) {
+                html = '<p class="text-gray-500">Inga företag matchar "' + escapeHtml(query) + '"</p>';
+            } else {
+                html = '<div class="space-y-2">';
+                filtered.forEach(function(c) {
+                    html += '<div class="p-3 border rounded hover:bg-gray-50 cursor-pointer" onclick="openCompanyDrawer(\'' + c.id + '\')">';
+                    html += '<strong>' + escapeHtml(c.name) + '</strong>';
+                    if (c.org_number) html += ' <span class="text-gray-500">(' + escapeHtml(c.org_number) + ')</span>';
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+            document.getElementById('companies-list').innerHTML = html;
+        }
+
+        window.filterCompanies = function() {
+            renderCompanies();
+        };
+
+        window.editCompany = function(id) {
+            var c = companies.find(function(x) { return x.id === id; });
+            if (!c) return;
+            document.getElementById('company-id').value = c.id;
+            document.getElementById('company-name').value = c.name || '';
+            document.getElementById('company-org').value = c.org_number || '';
+            document.getElementById('company-modal-title').textContent = 'Redigera företag';
+            document.getElementById('company-modal').classList.add('active');
+        };
+
+        // =====================
+        // Contacts
+        // =====================
+        async function loadContacts() {
+            debug('Laddar kontakter...');
+            try {
+                var result = await supabase.from('contacts').select('*, company:companies(id,name)').order('name');
+                if (result.error) {
+                    var r2 = await supabase.from('contacts').select('id,name,email,phone,company_id,pipedrive_person_id,created_at').order('name');
+                    if (r2.error) throw r2.error;
+                    var byId = {};
+                    (companies || []).forEach(function(c) { if (c && c.id) byId[c.id] = c; });
+                    contacts = (r2.data || []).map(function(c) {
+                        var cc = Object.assign({}, c);
+                        if (cc.company_id && byId[cc.company_id]) {
+                            cc.company = { id: cc.company_id, name: byId[cc.company_id].name };
+                        } else {
+                            cc.company = null;
+                        }
+                        return cc;
+                    });
+                    renderContacts();
+                    return;
+                }
+                contacts = result.data || [];
+                renderContacts();
+                debug('Laddade ' + contacts.length + ' kontakter');
+            } catch (e) {
+                debug('Kontakter FEL: ' + (e && e.message ? e.message : e));
+                document.getElementById('contacts-list').innerHTML = '<p class="text-red-600">Kunde inte ladda kontakter.</p>';
+            }
+        }
+
+        function renderContacts() {
+            var wrap = document.getElementById('contacts-list');
+            if (!wrap) return;
+
+            var searchInput = document.getElementById('contact-search');
+            var query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+
+            var filtered = (contacts || []).filter(function(p) {
+                if (!query) return true;
+                var name = (p.name || '').toLowerCase();
+                var email = (p.email || '').toLowerCase();
+                var phone = (p.phone || '').toLowerCase();
+                var company = (p.company && p.company.name) ? p.company.name.toLowerCase() : '';
+                return name.includes(query) || email.includes(query) || phone.includes(query) || company.includes(query);
+            });
+
+            if (!contacts || contacts.length === 0) {
+                wrap.innerHTML = '<p class="text-gray-500">Inga kontakter ännu</p>';
+                return;
+            }
+
+            if (filtered.length === 0) {
+                wrap.innerHTML = '<p class="text-gray-500">Inga kontakter matchar "' + escapeHtml(query) + '"</p>';
+                return;
+            }
+
+            var html = '<div class="space-y-2">';
+            filtered.forEach(function(p) {
+                var companyName = (p.company && p.company.name) ? p.company.name : '';
+                html += '<div class="p-3 border rounded hover:bg-gray-50 cursor-pointer" onclick="editContact(\'' + p.id + '\')">';
+                html += '<div class="flex justify-between items-start gap-3">';
+                html += '<div>';
+                html += '<div class="font-semibold">' + escapeHtml(p.name || '') + '</div>';
+                html += '<div class="text-sm text-gray-600">' +
+                    (p.email ? escapeHtml(p.email) : '') +
+                    (p.phone ? (p.email ? ' · ' : '') + escapeHtml(p.phone) : '') +
+                    '</div>';
+                if (companyName) html += '<div class="text-sm text-gray-500">' + escapeHtml(companyName) + '</div>';
+                html += '</div>';
+                html += '<div class="text-xs text-gray-400">›</div>';
+                html += '</div></div>';
+            });
+            html += '</div>';
+            wrap.innerHTML = html;
+        }
+
+        window.filterContacts = function() {
+            renderContacts();
+        };
+
+        window.editContact = function(id) {
+            var p = (contacts || []).find(function(x) { return String(x.id) === String(id); });
+            if (!p) return;
+            document.getElementById('contact-id').value = p.id || '';
+            document.getElementById('contact-name').value = p.name || '';
+            document.getElementById('contact-email').value = p.email || '';
+            document.getElementById('contact-phone').value = p.phone || '';
+            document.getElementById('delete-contact-btn').classList.remove('hidden');
+            populateCompanySelect('contact-company', p.company_id || (p.company && p.company.id ? p.company.id : ''));
+            document.getElementById('contact-modal-title').textContent = 'Redigera kontakt';
+            document.getElementById('contact-modal').classList.add('active');
+        };
+
+        // =====================
+        // Pipelines & Stages
+        // =====================
+        async function loadPipelinesAndStages() {
+            try {
+                var pRes = await supabase.from('pipelines').select('id, name, is_default').order('name', { ascending: true });
+                if (pRes.error) throw pRes.error;
+                pipelines = pRes.data || [];
+                var sRes = await supabase.from('stages').select('id, pipeline_id, name, order_index, default_probability').order('order_index', { ascending: true });
+                if (sRes.error) throw sRes.error;
+                stages = sRes.data || [];
+                stagesByPipeline = {};
+                stages.forEach(function(s) {
+                    if (!stagesByPipeline[s.pipeline_id]) stagesByPipeline[s.pipeline_id] = [];
+                    stagesByPipeline[s.pipeline_id].push(s);
+                });
+                if (!selectedPipelineId) {
+                    var def = pipelines.find(function(x) { return x.is_default; }) || pipelines[0];
+                    selectedPipelineId = def ? def.id : null;
+                }
+            } catch (e) {
+                pipelines = [{ id: 'fallback-moment', name: 'Moment', is_default: true }];
+                stagesByPipeline = {
+                    'fallback-moment': STAGE_FALLBACK.map(function(s) {
+                        return { id: 'fallback-' + slugify(s.key), pipeline_id: 'fallback-moment', name: s.key, order_index: s.order, default_probability: s.default_probability, _uiColor: s.color };
+                    })
+                };
+                selectedPipelineId = 'fallback-moment';
+            }
+            var sel = document.getElementById('pipeline-select');
+            if (!sel) return;
+            sel.innerHTML = '';
+            pipelines.forEach(function(p) {
+                var opt = document.createElement('option');
+                opt.value = p.id;
+                opt.textContent = p.name;
+                sel.appendChild(opt);
+            });
+            if (selectedPipelineId) sel.value = selectedPipelineId;
+        }
+
+        function getSelectedPipelineStageList() {
+            var list = stagesByPipeline[selectedPipelineId] || [];
+            return list.slice().sort(function(a, b) { return (a.order_index || 0) - (b.order_index || 0); });
+        }
+
+        function populateDealStageSelect(selectedValue) {
+            var sel = document.getElementById('deal-stage');
+            if (!sel) return;
+            sel.innerHTML = '';
+            var list = getSelectedPipelineStageList();
+            if (!list.length) {
+                list = STAGE_FALLBACK.map(function(s) { return { id: 'fallback-' + slugify(s.key), name: s.key, order_index: s.order, default_probability: s.default_probability }; })
+                    .sort(function(a, b) { return (a.order_index || 0) - (b.order_index || 0); });
+            }
+            list.forEach(function(s) {
+                var opt = document.createElement('option');
+                opt.value = s.name;
+                opt.setAttribute('data-stage-id', s.id);
+                opt.textContent = s.name;
+                sel.appendChild(opt);
+            });
+            if (selectedValue) sel.value = selectedValue;
+        }
+
+        // =====================
+        // Deals
+        // =====================
+        async function loadDeals() {
+            debug('Laddar affärer...');
+            try {
+                var result = await supabase.from('deals').select('*, company:companies(id, name)').order('created_at', { ascending: false });
+                if (result.error) throw result.error;
+                deals = result.data || [];
+                debug('Laddade ' + deals.length + ' affärer');
+                renderPipeline();
+            } catch (e) {
+                debug('Fel ladda affärer: ' + e.message);
+            }
+        }
+
+        function renderPipeline() {
+            var board = document.getElementById('pipeline-board');
+            if (!board) return;
+
+            var filter = (document.getElementById('pipeline-filter')?.value || 'open');
+            var sort = (document.getElementById('pipeline-sort')?.value || 'updated_desc');
+
+            if (!selectedPipelineId) {
+                var first = pipelines && pipelines[0];
+                selectedPipelineId = first ? first.id : null;
+            }
+            var stageList = (stagesByPipeline[selectedPipelineId] || []).slice();
+
+            function stageColor(stageName) {
+                var hit = STAGE_FALLBACK.find(function(s) { return s.key === stageName; });
+                return hit ? hit.color : 'bg-gray-100 border-l-4 border-gray-300';
+            }
+
+            var filtered = (deals || []).filter(function(d) {
+                var st = (d.deal_status || d.status || '').toLowerCase();
+                if (st === 'pagaende') st = 'open';
+                if (filter === 'open') return st !== 'won' && st !== 'lost';
+                if (filter === 'won') return st === 'won';
+                if (filter === 'lost') return st === 'lost';
+                return true;
+            });
+
+            function num(v) { return parseFloat(v) || 0; }
+            filtered.sort(function(a, b) {
+                if (sort === 'value_desc') return num(b.value) - num(a.value);
+                if (sort === 'value_asc') return num(a.value) - num(b.value);
+                if (sort === 'updated_desc') return (new Date(b.updated_at || b.created_at || 0)) - (new Date(a.updated_at || a.created_at || 0));
+                return 0;
+            });
+
+            var openDeals = filtered.filter(function(d) {
+                var st = (d.deal_status || d.status || '').toLowerCase();
+                return st !== 'won' && st !== 'lost';
+            });
+
+            function getStageMetaForDeal(d) {
+                var sid = d.stage_id;
+                if (sid && !sid.toString().startsWith('fallback-')) {
+                    for (var i = 0; i < stageList.length; i++) {
+                        if (stageList[i].id === sid) return stageList[i];
+                    }
+                }
+                var sName = d.stage_name || d.stage || '';
+                return stageList.find(function(s) { return s.name === sName; }) || null;
+            }
+
+            var sumOpen = openDeals.reduce(function(sum, d) { return sum + num(d.value); }, 0);
+            var sumWeighted = openDeals.reduce(function(sum, d) {
+                var p = d.probability;
+                if (p === null || p === undefined || p === '') {
+                    var meta = getStageMetaForDeal(d);
+                    p = meta ? meta.default_probability : 0;
+                }
+                p = num(p);
+                return sum + (num(d.value) * (p / 100));
+            }, 0);
+
+            var cntEl = document.getElementById('pipeline-count');
+            if (cntEl) cntEl.textContent = filtered.length + ' affärer';
+            var openEl = document.getElementById('sum-open');
+            var fcEl = document.getElementById('sum-forecast');
+            if (openEl) openEl.textContent = formatMoney(sumOpen);
+            if (fcEl) fcEl.textContent = formatMoney(sumWeighted);
+
+            stageList.sort(function(a, b) { return (a.order_index || 0) - (b.order_index || 0); });
+
+            var columns = stageList.map(function(s) {
+                return { id: s.id, name: s.name, color: s._uiColor || stageColor(s.name), probability: s.default_probability || 0 };
+            });
+
+            var html = '';
+            columns.forEach(function(col) {
+                var colDeals = filtered.filter(function(d) {
+                    if (d.stage_id && !d.stage_id.toString().startsWith('fallback-')) return d.stage_id === col.id;
+                    var sName = d.stage_name || d.stage || '';
+                    return sName === col.name || slugify(sName) === slugify(col.name);
+                });
+                var total = colDeals.reduce(function(sum, d) { return sum + num(d.value); }, 0);
+
+                html += '<div class="kanban-column ' + col.color + ' rounded-xl p-3" data-col="' + col.id + '" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropDeal(event, \'' + col.id + '\')">';
+                html += '  <div class="flex justify-between items-start mb-1 gap-2">';
+                html += '    <div class="font-bold text-sm leading-tight">' + escapeHtml(col.name) + '</div>';
+                html += '    <div class="text-xs text-gray-600 whitespace-nowrap">' + colDeals.length + '</div>';
+                html += '  </div>';
+                html += '  <div class="text-xs text-gray-600 mb-3">' + formatMoney(total) + '</div>';
+                html += '  <div class="space-y-2 min-h-[40px]">';
+
+                colDeals.forEach(function(d) {
+                    var companyName = (d.company && d.company.name) ? d.company.name : '';
+                    html += '    <div class="deal-card bg-white rounded p-3 shadow-sm hover:shadow" draggable="true" ondragstart="onDragStart(event, \'' + d.id + '\')" onclick="editDeal(\'' + d.id + '\')">';
+                    html += '      <div class="font-medium text-sm">' + escapeHtml(d.name || '') + '</div>';
+                    if (companyName) html += '      <div class="text-xs text-gray-500">' + escapeHtml(companyName) + '</div>';
+                    html += '      <div class="text-sm font-semibold mt-1">' + formatMoney(d.value) + '</div>';
+                    html += '    </div>';
+                });
+
+                html += '  </div></div>';
+            });
+
+            board.innerHTML = html;
+        }
+
+        window.editDeal = function(id) {
+            var d = deals.find(function(x) { return x.id === id; });
+            if (!d) return;
+            document.getElementById('deal-id').value = d.id;
+            document.getElementById('deal-name').value = d.name || '';
+            updateCompanySelect();
+            document.getElementById('deal-company').value = d.company_id || '';
+            document.getElementById('deal-value').value = d.value || '';
+            var stageName = d.stage_name || d.stage || 'Prospekt';
+            populateDealStageSelect(stageName);
+            document.getElementById('deal-probability').value = (d.probability === null || d.probability === undefined) ? '' : d.probability;
+            var status = (d.deal_status || d.status || 'pagaende').toLowerCase();
+            if (status === 'open') status = 'pagaende';
+            document.getElementById('deal-status').value = status;
+            document.getElementById('deal-outcome-reason').value = d.outcome_reason || '';
+            document.getElementById('deal-outcome-notes').value = d.outcome_notes || '';
+            toggleOutcomeFields(status);
+            document.getElementById('deal-modal-title').textContent = 'Redigera affär';
+            document.getElementById('delete-deal-btn').classList.remove('hidden');
+            document.getElementById('deal-modal').classList.add('active');
+        };
+
+        function toggleOutcomeFields(status) {
+            var wrap = document.getElementById('outcome-fields');
+            if (!wrap) return;
+            if (status === 'won' || status === 'lost') wrap.classList.remove('hidden');
+            else wrap.classList.add('hidden');
+            var label = document.getElementById('outcome-reason-label');
+            if (label) label.textContent = (status === 'won') ? 'Vinstorsak' : 'Förlustorsak';
+        }
+
+        // =====================
+        // Drag & Drop
+        // =====================
+        var draggedDealId = null;
+        var pendingOutcome = null;
+        var isResolvingOutcome = false;
+        var lastOutcomeAt = 0;
+
+        function showOutcomeZones(show) {
+            var oz = document.getElementById('outcome-zones');
+            if (!oz) return;
+            if (show) oz.classList.add('active');
+            else oz.classList.remove('active');
+            try {
+                document.getElementById('win-zone')?.classList.remove('drag-over');
+                document.getElementById('loss-zone')?.classList.remove('drag-over');
+            } catch (e) {}
+        }
+
+        window.onDragStart = function(ev, dealId) {
+            draggedDealId = dealId;
+            showOutcomeZones(true);
+            try { ev.dataTransfer.setData('text/plain', dealId); } catch (e) {}
+            ev.dataTransfer.effectAllowed = 'move';
+        };
+
+        window.onDragEnd = function() {
+            draggedDealId = null;
+            showOutcomeZones(false);
+        };
+
+        window.onDragOver = function(ev) {
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = 'move';
+            var col = ev.currentTarget;
+            if (col && col.classList) col.classList.add('drag-over');
+        };
+
+        window.onDragLeave = function(ev) {
+            var col = ev.currentTarget;
+            if (col && col.classList) col.classList.remove('drag-over');
+        };
+
+        window.onDragOverOutcome = function(ev) {
+            ev.preventDefault();
+            try { ev.dataTransfer.dropEffect = 'move'; } catch (e) {}
+            var z = ev.currentTarget;
+            if (z && z.classList) z.classList.add('drag-over');
+        };
+
+        window.onDragLeaveOutcome = function(ev) {
+            var z = ev.currentTarget;
+            if (z && z.classList) z.classList.remove('drag-over');
+        };
+
+        window.onDropDeal = async function(ev, colId) {
+            ev.preventDefault();
+            var col = ev.currentTarget;
+            if (col && col.classList) col.classList.remove('drag-over');
+            var dealId = draggedDealId;
+            try { dealId = ev.dataTransfer.getData('text/plain') || dealId; } catch (e) {}
+            draggedDealId = null;
+            showOutcomeZones(false);
+            if (!dealId) return;
+            await moveDealToColumn(dealId, colId);
+        };
+
+        window.onDropOutcome = function(ev, outcome) {
+            ev.preventDefault();
+            ev.stopPropagation();
+
+            var nowTs = Date.now();
+            if (isResolvingOutcome) return;
+            if (lastOutcomeAt && (nowTs - lastOutcomeAt) < 1800) return;
+            isResolvingOutcome = true;
+
+            var z = ev.currentTarget;
+            if (z && z.classList) z.classList.remove('drag-over');
+
+            var dealId = draggedDealId;
+            try { dealId = ev.dataTransfer.getData('text/plain') || dealId; } catch (e) {}
+            draggedDealId = null;
+            showOutcomeZones(false);
+
+            if (!dealId) { isResolvingOutcome = false; return; }
+
+            var rect = z && z.getBoundingClientRect ? z.getBoundingClientRect() : null;
+            var cx = rect ? (rect.left + rect.width / 2) : (window.innerWidth - 120);
+            var cy = rect ? (rect.top + rect.height / 2) : (window.innerHeight - 80);
+
+            if (outcome === 'won') {
+                lastOutcomeAt = Date.now();
+                var d = deals.find(function(x) { return x.id === dealId; });
+                if (!d) { isResolvingOutcome = false; return; }
+                deals = deals.filter(function(x) { return x.id !== dealId; });
+                renderPipeline();
+                burstAt(cx, cy, formatMoney(d.value || 0));
+                finalizeWonOutcome(d).finally(function() {
+                    setTimeout(function() { isResolvingOutcome = false; }, 900);
+                });
+                return;
+            }
+
+            prepareOutcomeModal(dealId, outcome);
+        };
+
+        async function moveDealToColumn(dealId, colId) {
+            var d = deals.find(function(x) { return x.id === dealId; });
+            if (!d) return;
+
+            var payload = { deal_status: 'pagaende', status: 'pagaende', closed_at: null };
+            var stageName = null;
+
+            for (var pid in stagesByPipeline) {
+                var found = (stagesByPipeline[pid] || []).find(function(s) { return s.id === colId; });
+                if (found) { stageName = found.name; break; }
+            }
+            if (!stageName) {
+                var fb = STAGE_FALLBACK.find(function(s) { return s.key === colId; });
+                stageName = fb ? fb.key : (d.stage || 'Bubblare');
+            }
+            payload.stage = stageName;
+
+            d.deal_status = 'pagaende';
+            d.status = 'pagaende';
+            d.closed_at = null;
+            d.stage = stageName;
+
+            renderPipeline();
+
+            supabase.from('deals').update(payload).eq('id', dealId)
+                .then(function() { loadDeals(); })
+                .catch(function(err) { console.error('Move deal failed', err); loadDeals(); });
+        }
+
+        // =====================
+        // Outcome (Won/Lost)
+        // =====================
+        async function finalizeWonOutcome(deal) {
+            try {
+                var payload = {
+                    status: 'won',
+                    deal_status: 'won',
+                    outcome_reason: null,
+                    outcome_notes: null,
+                    closed_at: new Date().toISOString()
+                };
+                var res = await supabase.from('deals').update(payload).eq('id', deal.id);
+                if (res && res.error) throw res.error;
+                closedDealsCache.unshift(Object.assign({}, deal, payload));
+                showToast('Affär vunnen!', 'success');
+            } catch (e) {
+                deals.unshift(deal);
+                renderPipeline();
+                showToast('Kunde inte markera som vunnen: ' + (e?.message || e), 'error');
+            }
+        }
+
+        function prepareOutcomeModal(dealId, outcome) {
+            var d = deals.find(function(x) { return x.id === dealId; });
+            if (!d) { isResolvingOutcome = false; return; }
+            if (outcome !== 'lost') { isResolvingOutcome = false; return; }
+
+            deals = deals.filter(function(x) { return x.id !== dealId; });
+            renderPipeline();
+
+            pendingOutcome = { deal: d, outcome: 'lost' };
+            setTimeout(function() { openOutcomeModal(d, 'lost'); }, 90);
+        }
+
+        function openOutcomeModal(deal, outcome) {
+            var backdrop = document.getElementById('modal-backdrop');
+            var modal = document.getElementById('outcome-modal');
+            if (!backdrop || !modal) return;
+
+            document.getElementById('outcome-title').textContent = 'Markera som förlorad';
+            document.getElementById('outcome-dealname').textContent = (deal.name || 'Affär') + (deal.value ? ' • ' + formatMoney(deal.value) : '');
+            document.getElementById('outcome-reason').value = '';
+            document.getElementById('outcome-notes').value = '';
+
+            backdrop.classList.add('show');
+            modal.classList.add('show');
+        }
+
+        window.cancelOutcomeModal = function() {
+            var backdrop = document.getElementById('modal-backdrop');
+            var modal = document.getElementById('outcome-modal');
+            if (backdrop) backdrop.classList.remove('show');
+            if (modal) modal.classList.remove('show');
+
+            if (pendingOutcome && pendingOutcome.deal) {
+                deals.unshift(pendingOutcome.deal);
+                pendingOutcome = null;
+                renderPipeline();
+            }
+            isResolvingOutcome = false;
+        };
+
+        window.saveOutcomeModal = function() {
+            if (!pendingOutcome || !pendingOutcome.deal) return;
+            var d = pendingOutcome.deal;
+            var outcome = pendingOutcome.outcome;
+            var reason = document.getElementById('outcome-reason').value || null;
+
+            if (outcome === 'lost' && (!reason || !reason.trim())) {
+                alert('Orsak krävs för förlorad affär.');
+                return;
+            }
+            var notes = document.getElementById('outcome-notes').value || null;
+
+            var payload = {
+                status: outcome,
+                deal_status: outcome,
+                outcome_reason: reason,
+                outcome_notes: notes,
+                closed_at: new Date().toISOString()
+            };
+
+            supabase.from('deals').update(payload).eq('id', d.id)
+                .then(function() {
+                    var backdrop = document.getElementById('modal-backdrop');
+                    var modal = document.getElementById('outcome-modal');
+                    if (backdrop) backdrop.classList.remove('show');
+                    if (modal) modal.classList.remove('show');
+                    pendingOutcome = null;
+                    isResolvingOutcome = false;
+                    showToast('Affär markerad som förlorad', 'success');
+                    loadDeals();
+                })
+                .catch(function(err) {
+                    console.error('Outcome update failed', err);
+                    deals.unshift(d);
+                    pendingOutcome = null;
+                    isResolvingOutcome = false;
+                    renderPipeline();
+                    alert('Kunde inte spara.');
+                });
+        };
+
+        // =====================
+        // Celebration
+        // =====================
+        // === OPTIMERAD CELEBRATION (lätt version) ===
+        function burstAt(x, y, valueText) {
+            // Visa bara pengapop + lite konfetti - ingen tung animation
+            showLightCelebration();
+
+            try {
+                var pop = document.createElement('div');
+                pop.className = 'money-pop';
+                pop.style.left = x + 'px';
+                pop.style.top = y + 'px';
+                pop.textContent = '+ ' + (valueText || '');
+                document.body.appendChild(pop);
+                requestAnimationFrame(function() { pop.classList.add('show'); });
+                setTimeout(function() { pop.classList.add('hide'); }, 900);
+                setTimeout(function() { try { pop.remove(); } catch (e) {} }, 1600);
+            } catch (e) {}
+        }
+
+        function showLightCelebration() {
+            // Lätt CSS-baserad konfetti (endast 25 element)
+            var overlay = document.getElementById('moneyRainOverlay');
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'moneyRainOverlay';
+                document.body.appendChild(overlay);
+            }
+            overlay.innerHTML = '';
+            overlay.style.display = 'block';
+
+            var emojis = ['💰', '✨', '🎉', '💵'];
+            var drops = 25; // Drastiskt reducerat från 420
+
+            for (var i = 0; i < drops; i++) {
+                var s = document.createElement('span');
+                s.className = 'moneyDrop';
+                s.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+                s.style.left = Math.random() * 100 + 'vw';
+                s.style.fontSize = (32 + Math.random() * 32) + 'px';
+                s.style.animationDuration = (1200 + Math.random() * 800) + 'ms';
+                s.style.animationDelay = Math.random() * 200 + 'ms';
+                s.style.setProperty('--dx', (Math.random() * 100 - 50).toFixed(0) + 'px');
+                overlay.appendChild(s);
+            }
+
+            setTimeout(function() {
+                try { overlay.remove(); } catch (e) {}
+            }, 2000);
+        }
+
+        // Behåll för bakåtkompatibilitet men gör den lätt
+        function triggerMoneyRain(durationMs, drops) {
+            showLightCelebration();
+        }
+
+        function startFullscreenCelebration() {
+            // Lätt canvas-animation med färre partiklar
+            var canvas = document.getElementById('celebration-canvas');
+            if (!canvas) return;
+            canvas.style.display = 'block';
+
+            var dpr = window.devicePixelRatio || 1;
+            var W = window.innerWidth;
+            var H = window.innerHeight;
+            canvas.width = Math.floor(W * dpr);
+            canvas.height = Math.floor(H * dpr);
+
+            var ctx = canvas.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            var start = performance.now();
+
+            // OPTIMERAT: Max 60 konfetti istället för 900
+            var confetti = [];
+            var confettiCount = 60;
+            for (var i = 0; i < confettiCount; i++) {
+                confetti.push({
+                    x: Math.random() * W,
+                    y: Math.random() * H - H,
+                    vx: (Math.random() * 2 - 1) * 2,
+                    vy: 4 + Math.random() * 4,
+                    r: 3 + Math.random() * 4,
+                    rot: Math.random() * Math.PI,
+                    vr: (Math.random() * 2 - 1) * 0.2
+                });
+            }
+
+            // OPTIMERAT: Max 20 sedlar istället för 260
+            var bills = [];
+            var billCount = 20;
+            for (var bi = 0; bi < billCount; bi++) {
+                bills.push({
+                    x: Math.random() * W,
+                    y: Math.random() * H - H,
+                    vx: (Math.random() * 2 - 1) * 0.8,
+                    vy: 3 + Math.random() * 3,
+                    w: 24 + Math.random() * 20,
+                    h: 12 + Math.random() * 10,
+                    rot: Math.random() * Math.PI,
+                    vr: (Math.random() * 2 - 1) * 0.06,
+                    a: 0.9
+                });
+            }
+
+            // OPTIMERAT: 4 bursts istället för 18
+            var bursts = [];
+            for (var b = 0; b < 4; b++) {
+                bursts.push({
+                    x: Math.random() * W * 0.8 + W * 0.1,
+                    y: Math.random() * H * 0.4 + H * 0.1,
+                    r: 0,
+                    max: 100 + Math.random() * 100,
+                    a: 1,
+                    speed: 6 + Math.random() * 6
+                });
+            }
+
+            function draw(now) {
+                var elapsed = now - start;
+                ctx.clearRect(0, 0, W, H);
+                ctx.fillStyle = 'rgba(17,24,39,0.10)';
+                ctx.fillRect(0, 0, W, H);
+
+                for (var bi = 0; bi < bills.length; bi++) {
+                    var bll = bills[bi];
+                    bll.x += bll.vx;
+                    bll.y += bll.vy;
+                    bll.rot += bll.vr;
+                    if (bll.y > H + 40) { bll.y = -40 - Math.random() * H * 0.5; bll.x = Math.random() * W; }
+
+                    ctx.save();
+                    ctx.translate(bll.x, bll.y);
+                    ctx.rotate(bll.rot);
+                    ctx.globalAlpha = bll.a;
+                    ctx.fillStyle = 'rgba(34,197,94,0.85)';
+                    ctx.fillRect(-bll.w / 2, -bll.h / 2, bll.w, bll.h);
+                    ctx.globalAlpha = 0.45;
+                    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                    ctx.fillRect(-bll.w / 4, -bll.h / 6, bll.w / 2, bll.h / 3);
+                    ctx.globalAlpha = 0.95;
+                    ctx.fillStyle = 'rgba(3,105,161,0.9)';
+                    ctx.font = 'bold 10px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('$', 0, 0);  // FIX: Syntaxfelet fixat här
+                    ctx.restore();
+                }
+
+                for (var k = 0; k < bursts.length; k++) {
+                    var bw = bursts[k];
+                    bw.r += bw.speed;
+                    bw.a *= 0.973;
+                    ctx.beginPath();
+                    ctx.arc(bw.x, bw.y, bw.r, 0, Math.PI * 2);
+                    ctx.strokeStyle = 'rgba(245,158,11,' + (0.58 * bw.a) + ')';
+                    ctx.lineWidth = 4;
+                    ctx.stroke();
+                    if (bw.r > bw.max) { bw.r = 0; bw.a = 1; bw.x = Math.random() * W; bw.y = Math.random() * H * 0.55; }
+                }
+
+                for (var i = 0; i < confetti.length; i++) {
+                    var c = confetti[i];
+                    c.x += c.vx;
+                    c.y += c.vy;
+                    c.rot += c.vr;
+                    if (c.y > H + 30) { c.y = -30 - Math.random() * H * 0.6; c.x = Math.random() * W; }
+                    var mod = i % 3;
+                    if (mod === 0) ctx.fillStyle = 'rgba(245,158,11,0.95)';
+                    if (mod === 1) ctx.fillStyle = 'rgba(255,255,255,0.92)';
+                    if (mod === 2) ctx.fillStyle = 'rgba(17,24,39,0.85)';
+                    ctx.save();
+                    ctx.translate(c.x, c.y);
+                    ctx.rotate(c.rot);
+                    ctx.fillRect(-c.r, -c.r, c.r * 2.4, c.r * 1.4);
+                    ctx.restore();
+                }
+
+                if (elapsed < 1200) {  // Kortare animation (1.2s istället för 2.2s)
+                    requestAnimationFrame(draw);
+                } else {
+                    canvas.style.display = 'none';
+                }
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        // =====================
+        // Closed Deals Drawer
+        // =====================
+        window.openClosedDeals = function() {
+            var backdrop = document.getElementById('drawer-backdrop');
+            var drawer = document.getElementById('closed-drawer');
+            if (backdrop) backdrop.classList.add('show');
+            if (drawer) drawer.classList.add('show');
+
+            supabase.from('deals').select('*').in('status', ['won', 'lost']).order('closed_at', { ascending: false })
+                .then(function(res) {
+                    closedDealsCache = (res && res.data) ? res.data : [];
+                    renderClosedDeals();
+                })
+                .catch(function() {
+                    closedDealsCache = [];
+                    renderClosedDeals();
+                });
+        };
+
+        window.closeClosedDeals = function() {
+            var backdrop = document.getElementById('drawer-backdrop');
+            var drawer = document.getElementById('closed-drawer');
+            if (backdrop) backdrop.classList.remove('show');
+            if (drawer) drawer.classList.remove('show');
+        };
+
+        window.setClosedFilter = function(f) {
+            closedFilter = f;
+            document.getElementById('pill-all')?.classList.toggle('active', f === 'all');
+            document.getElementById('pill-won')?.classList.toggle('active', f === 'won');
+            document.getElementById('pill-lost')?.classList.toggle('active', f === 'lost');
+            renderClosedDeals();
+        };
+
+        window.renderClosedDeals = function() {
+            var q = (document.getElementById('closed-search')?.value || '').toLowerCase().trim();
+            var list = document.getElementById('closed-list');
+            if (!list) return;
+
+            var items = closedDealsCache.slice();
+            if (closedFilter !== 'all') items = items.filter(function(d) { return (d.status || d.deal_status) === closedFilter; });
+            if (q) items = items.filter(function(d) {
+                var n = (d.name || '').toLowerCase();
+                return n.includes(q);
+            });
+
+            if (!items.length) {
+                list.innerHTML = '<div class="text-sm text-gray-600">Inga avslutade affärer matchar filtret.</div>';
+                return;
+            }
+
+            list.innerHTML = items.map(function(d) {
+                var st = (d.status || d.deal_status || '').toLowerCase();
+                var tag = st === 'won' ? '<span class="tag won">Vunnen</span>' : '<span class="tag lost">Förlorad</span>';
+                var reason = d.outcome_reason ? ('Orsak: ' + d.outcome_reason) : '';
+                var notes = d.outcome_notes ? d.outcome_notes : '';
+                var meta = [reason, notes].filter(Boolean).join(' • ');
+                return '<div class="drawer-item">' +
+                    '<div class="t">' + escapeHtml(d.name || 'Affär') + (d.value ? ' • ' + formatMoney(d.value) : '') + '</div>' +
+                    '<div class="m">' + escapeHtml(meta || '—') + '</div>' +
+                    tag + '</div>';
+            }).join('');
+        };
+
+        // =====================
+        // Company Drawer
+        // =====================
+        var currentCompanyId = null;
+
+        window.openCompanyDrawer = function(companyId) {
+            currentCompanyId = companyId;
+            var drawer = document.getElementById('company-drawer');
+            if (!drawer) return;
+            drawer.classList.remove('hidden');
+            activateCompanyTab('overview');
+            loadCompanyDrawer(companyId);
+        };
+
+        window.closeCompanyDrawer = function() {
+            var drawer = document.getElementById('company-drawer');
+            if (drawer) drawer.classList.add('hidden');
+            currentCompanyId = null;
+        };
+
+        function activateCompanyTab(tab) {
+            var tabs = document.querySelectorAll('.company-tab');
+            tabs.forEach(function(b) {
+                var isActive = b.getAttribute('data-tab') === tab;
+                b.classList.toggle('bg-moment-orange', isActive);
+                b.classList.toggle('text-white', isActive);
+                b.classList.toggle('border-moment-orange', isActive);
+            });
+            ['overview', 'deals', 'contacts'].forEach(function(t) {
+                var panel = document.getElementById('company-tab-' + t);
+                if (panel) panel.classList.toggle('hidden', t !== tab);
+            });
+        }
+
+        async function loadCompanyDrawer(companyId) {
+            showLoading();
+            try {
+                if (!companies || companies.length === 0) await loadCompanies();
+                var c = (companies || []).find(function(x) { return String(x.id) === String(companyId); });
+                if (!c) {
+                    var rc = await supabase.from('companies').select('*').eq('id', companyId).single();
+                    if (rc.error) throw rc.error;
+                    c = rc.data;
+                }
+
+                document.getElementById('company-drawer-title').textContent = c && c.name ? c.name : '—';
+                var meta = [];
+                if (c && c.org_number) meta.push('Org.nr: ' + c.org_number);
+                document.getElementById('company-drawer-meta').textContent = meta.join(' • ');
+
+                var editBtn = document.getElementById('company-drawer-edit');
+                if (editBtn) editBtn.onclick = function() { editCompany(companyId); };
+
+                var newDealBtn = document.getElementById('company-drawer-new-deal');
+                if (newDealBtn) newDealBtn.onclick = function() {
+                    document.getElementById('deal-id').value = '';
+                    document.getElementById('deal-name').value = '';
+                    document.getElementById('deal-value').value = '';
+                    populateCompanySelect('deal-company', companyId);
+                    document.getElementById('deal-modal-title').textContent = 'Ny affär';
+                    document.getElementById('delete-deal-btn').classList.add('hidden');
+                    document.getElementById('deal-modal').classList.add('active');
+                };
+
+                var newContactBtn = document.getElementById('company-drawer-new-contact');
+                if (newContactBtn) newContactBtn.onclick = function() {
+                    document.getElementById('contact-id').value = '';
+                    document.getElementById('contact-name').value = '';
+                    document.getElementById('contact-email').value = '';
+                    document.getElementById('contact-phone').value = '';
+                    populateCompanySelect('contact-company', companyId);
+                    document.getElementById('delete-contact-btn').classList.add('hidden');
+                    document.getElementById('contact-modal-title').textContent = 'Ny kontakt';
+                    document.getElementById('contact-modal').classList.add('active');
+                };
+
+                var dealsRes = await supabase.from('deals').select('id,name,value,stage,pipeline,status,deal_status,created_at').eq('company_id', companyId).order('created_at', { ascending: false });
+                if (dealsRes.error) throw dealsRes.error;
+
+                var contactsRes = await supabase.from('contacts').select('id,name,email,phone,created_at,company_id').eq('company_id', companyId).order('name');
+                if (contactsRes.error) throw contactsRes.error;
+
+                renderCompanyOverview(c, dealsRes.data || [], contactsRes.data || []);
+                renderCompanyDeals(dealsRes.data || []);
+                renderCompanyContacts(contactsRes.data || []);
+
+                document.querySelectorAll('.company-tab').forEach(function(btn) {
+                    btn.onclick = function() { activateCompanyTab(btn.getAttribute('data-tab')); };
+                });
+            } catch (e) {
+                showToast('Kunde inte ladda företag: ' + (e && e.message ? e.message : e), 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function renderCompanyOverview(company, relDeals, relContacts) {
+            var el = document.getElementById('company-tab-overview');
+            if (!el) return;
+
+            var openDeals = (relDeals || []).filter(function(d) {
+                var st = (d.deal_status || d.status || 'open');
+                return st === 'open' || st === 'Open';
+            }).length;
+            var wonDeals = (relDeals || []).filter(function(d) { return String(d.deal_status || d.status || '').toLowerCase() === 'won'; }).length;
+            var lostDeals = (relDeals || []).filter(function(d) { return String(d.deal_status || d.status || '').toLowerCase() === 'lost'; }).length;
+            var sumOpen = (relDeals || []).reduce(function(acc, d) {
+                var st = String(d.deal_status || d.status || 'open').toLowerCase();
+                if (st === 'won' || st === 'lost') return acc;
+                return acc + (Number(d.value) || 0);
+            }, 0);
+
+            var html = '<div class="grid grid-cols-2 md:grid-cols-4 gap-3">';
+            html += cardStat('Kontakter', (relContacts || []).length);
+            html += cardStat('Öppna affärer', openDeals);
+            html += cardStat('Vunna', wonDeals);
+            html += cardStat('Förlorade', lostDeals);
+            html += '</div>';
+            html += '<div class="mt-4 bg-gray-50 border rounded-xl p-4">';
+            html += '<div class="text-sm text-gray-600">Summa öppna affärer</div>';
+            html += '<div class="text-2xl font-bold">' + formatMoney(sumOpen) + '</div>';
+            html += '</div>';
+            el.innerHTML = html;
+        }
+
+        function cardStat(label, value) {
+            return '<div class="border rounded-xl p-4"><div class="text-xs text-gray-500">' + label + '</div><div class="text-2xl font-bold">' + value + '</div></div>';
+        }
+
+        function renderCompanyDeals(relDeals) {
+            var el = document.getElementById('company-tab-deals');
+            if (!el) return;
+            if (!relDeals || relDeals.length === 0) {
+                el.innerHTML = '<p class="text-gray-500">Inga affärer kopplade till företaget ännu.</p>';
+                return;
+            }
+            var html = '<div class="space-y-2">';
+            relDeals.forEach(function(d) {
+                var st = String(d.deal_status || d.status || 'open').toLowerCase();
+                var badge = st === 'won' ? 'bg-green-100 text-green-800' : (st === 'lost' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800');
+                html += '<div class="p-3 border rounded hover:bg-gray-50 cursor-pointer" onclick="editDeal(\'' + d.id + '\')">';
+                html += '<div class="flex items-start justify-between gap-3">';
+                html += '<div><div class="font-semibold">' + escapeHtml(d.name || '') + '</div>';
+                html += '<div class="text-xs text-gray-500">' + escapeHtml(d.stage || '') + '</div></div>';
+                html += '<div class="text-right">';
+                html += '<div class="font-bold">' + formatMoney(d.value) + '</div>';
+                html += '<div class="inline-flex mt-1 px-2 py-0.5 rounded text-xs ' + badge + '">' + st.toUpperCase() + '</div>';
+                html += '</div></div></div>';
+            });
+            html += '</div>';
+            el.innerHTML = html;
+        }
+
+        function renderCompanyContacts(relContacts) {
+            var el = document.getElementById('company-tab-contacts');
+            if (!el) return;
+            if (!relContacts || relContacts.length === 0) {
+                el.innerHTML = '<p class="text-gray-500">Inga kontakter kopplade till företaget ännu.</p>';
+                return;
+            }
+            var html = '<div class="space-y-2">';
+            relContacts.forEach(function(p) {
+                html += '<div class="p-3 border rounded hover:bg-gray-50 cursor-pointer" onclick="editContact(\'' + p.id + '\')">';
+                html += '<div class="font-semibold">' + escapeHtml(p.name || '') + '</div>';
+                var sub = [];
+                if (p.email) sub.push(escapeHtml(p.email));
+                if (p.phone) sub.push(escapeHtml(p.phone));
+                html += '<div class="text-xs text-gray-500">' + sub.join(' • ') + '</div>';
+                html += '</div>';
+            });
+            html += '</div>';
+            el.innerHTML = html;
+        }
+
+        // =====================
+        // Modal Events
+        // =====================
+        // Deal Modal
+        document.getElementById('new-deal-btn').onclick = function() {
+            document.getElementById('deal-form').reset();
+            document.getElementById('deal-id').value = '';
+            document.getElementById('deal-modal-title').textContent = 'Ny affär';
+            document.getElementById('delete-deal-btn').classList.add('hidden');
+            updateCompanySelect();
+            populateDealStageSelect('Bubblare');
+            document.getElementById('deal-probability').value = '';
+            document.getElementById('deal-outcome-reason').value = '';
+            document.getElementById('deal-outcome-notes').value = '';
+            toggleOutcomeFields('pagaende');
+            document.getElementById('deal-modal').classList.add('active');
+        };
+
+        document.getElementById('close-deal-modal').onclick = function() {
+            document.getElementById('deal-modal').classList.remove('active');
+        };
+
+        document.getElementById('cancel-deal').onclick = function() {
+            document.getElementById('deal-modal').classList.remove('active');
+        };
+
+        document.getElementById('deal-status').onchange = function(e) {
+            toggleOutcomeFields(e.target.value);
+        };
+
+        document.getElementById('deal-form').onsubmit = async function(e) {
+            e.preventDefault();
+            showLoading();
+            var id = document.getElementById('deal-id').value;
+            var dealStatus = document.getElementById('deal-status').value;
+            var stageName = document.getElementById('deal-stage').value || 'Bubblare';
+            var dbStatus = (dealStatus === 'pagaende') ? 'open' : dealStatus;
+
+            var probRaw = document.getElementById('deal-probability').value;
+            var probability = (probRaw === '' || probRaw === null) ? null : parseInt(probRaw, 10);
+            if (isNaN(probability)) probability = null;
+
+            var outcomeReason = document.getElementById('deal-outcome-reason').value || null;
+            var outcomeNotes = document.getElementById('deal-outcome-notes').value || null;
+            var isClosed = (dbStatus === 'won' || dbStatus === 'lost');
+
+            var data = {
+                name: document.getElementById('deal-name').value,
+                company_id: document.getElementById('deal-company').value || null,
+                value: document.getElementById('deal-value').value || null,
+                stage: stageName,
+                pipeline: selectedPipelineName || 'Moment',
+                deal_status: dbStatus,
+                status: dbStatus,
+                probability: probability,
+                outcome_reason: isClosed ? outcomeReason : null,
+                outcome_notes: isClosed ? outcomeNotes : null,
+                closed_at: isClosed ? new Date().toISOString() : null
+            };
+
+            try {
+                if (id) {
+                    await supabase.from('deals').update(data).eq('id', id);
+                } else {
+                    await supabase.from('deals').insert([data]);
+                }
+                document.getElementById('deal-modal').classList.remove('active');
+                await loadDeals();
+                showToast('Affär sparad', 'success');
+            } catch (e) {
+                alert('Fel: ' + e.message);
+            }
+            hideLoading();
+        };
+
+        document.getElementById('delete-deal-btn').onclick = async function() {
+            if (!confirm('Ta bort affären?')) return;
+            showLoading();
+            var id = document.getElementById('deal-id').value;
+            try {
+                await supabase.from('deals').delete().eq('id', id);
+                document.getElementById('deal-modal').classList.remove('active');
+                await loadDeals();
+                showToast('Affär borttagen', 'success');  // FIX: Rätt meddelande
+            } catch (e) {
+                alert('Fel: ' + e.message);
+            }
+            hideLoading();
+        };
+
+        // Company Modal
+        document.getElementById('new-company-btn').onclick = function() {
+            document.getElementById('company-form').reset();
+            document.getElementById('company-id').value = '';
+            document.getElementById('company-modal-title').textContent = 'Nytt företag';
+            document.getElementById('company-modal').classList.add('active');
+        };
+
+        document.getElementById('close-company-modal').onclick = function() {
+            document.getElementById('company-modal').classList.remove('active');
+        };
+
+        document.getElementById('cancel-company').onclick = function() {
+            document.getElementById('company-modal').classList.remove('active');
+        };
+
+        document.getElementById('company-form').onsubmit = async function(e) {
+            e.preventDefault();
+            showLoading();
+            var id = document.getElementById('company-id').value;
+            var data = {
+                name: document.getElementById('company-name').value,
+                org_number: document.getElementById('company-org').value || null
+            };
+            try {
+                if (id) {
+                    await supabase.from('companies').update(data).eq('id', id);
+                } else {
+                    await supabase.from('companies').insert([data]);
+                }
+                document.getElementById('company-modal').classList.remove('active');
+                await loadCompanies();
+                showToast('Företag sparat', 'success');
+            } catch (e) {
+                alert('Fel: ' + e.message);
+            }
+            hideLoading();
+        };
+
+        // Contact Modal
+        document.getElementById('new-contact-btn').onclick = function() {
+            document.getElementById('contact-form').reset();
+            document.getElementById('contact-id').value = '';
+            document.getElementById('contact-modal-title').textContent = 'Ny kontakt';
+            document.getElementById('delete-contact-btn').classList.add('hidden');
+            updateContactCompanySelect(null);
+            document.getElementById('contact-modal').classList.add('active');
+        };
+
+        document.getElementById('close-contact-modal').onclick = function() {
+            document.getElementById('contact-modal').classList.remove('active');
+        };
+
+        document.getElementById('cancel-contact-btn').onclick = function() {
+            document.getElementById('contact-modal').classList.remove('active');
+        };
+
+        document.getElementById('contact-form').onsubmit = async function(e) {
+            e.preventDefault();
+            showLoading();
+            var id = document.getElementById('contact-id').value;
+            var payload = {
+                name: document.getElementById('contact-name').value,
+                email: document.getElementById('contact-email').value || null,
+                phone: document.getElementById('contact-phone').value || null,
+                company_id: document.getElementById('contact-company').value || null
+            };
+            try {
+                if (id) {
+                    await supabase.from('contacts').update(payload).eq('id', id);
+                } else {
+                    await supabase.from('contacts').insert([payload]);
+                }
+                document.getElementById('contact-modal').classList.remove('active');
+                await loadContacts();
+                showToast('Kontakt sparad', 'success');
+            } catch (e) {
+                alert('Fel: ' + e.message);
+            }
+            hideLoading();
+        };
+
+        document.getElementById('delete-contact-btn').onclick = async function() {
+            var id = document.getElementById('contact-id').value;
+            if (!id) return;
+            if (!confirm('Ta bort kontakten?')) return;
+            showLoading();
+            try {
+                await supabase.from('contacts').delete().eq('id', id);
+                document.getElementById('contact-modal').classList.remove('active');
+                await loadContacts();
+                showToast('Kontakt borttagen', 'success');
+            } catch (e) {
+                alert('Fel: ' + e.message);
+            }
+            hideLoading();
+        };
+
+        // Import Modal
+        document.getElementById('import-btn').onclick = function() {
+            document.getElementById('import-modal').classList.add('active');
+        };
+
+        document.getElementById('close-import-modal').onclick = function() {
+            document.getElementById('import-modal').classList.remove('active');
+        };
+
+        // Pipeline controls
+        document.getElementById('pipeline-select').onchange = function(e) {
+            selectedPipelineId = e.target.value;
+            try {
+                var opt = e.target.options[e.target.selectedIndex];
+                selectedPipelineName = opt ? opt.textContent.trim() : 'Moment';
+            } catch (e) { selectedPipelineName = 'Moment'; }
+            renderPipeline();
+        };
+
+        document.getElementById('pipeline-filter').onchange = function() { renderPipeline(); };
+        document.getElementById('pipeline-sort').onchange = function() { renderPipeline(); };
+
+        // =====================
+        // Import (förenklad)
+        // =====================
+        document.getElementById('start-import').onclick = async function() {
+            var logDiv = document.getElementById('import-log');
+            logDiv.classList.remove('hidden');
+            logDiv.innerHTML = 'Startar import...<br>';
+
+            var compFile = document.getElementById('import-companies-file').files[0];
+            var dealFile = document.getElementById('import-deals-file').files[0];
+            var contactFile = document.getElementById('import-contacts-file').files[0];
+
+            if (!compFile && !dealFile && !contactFile) {
+                logDiv.innerHTML += 'Välj minst en CSV-fil.<br>';
+                return;
+            }
+
+            function parseCSV(text) {
+                var rows = [];
+                var currentRow = [];
+                var currentField = '';
+                var inQuotes = false;
+
+                for (var i = 0; i < text.length; i++) {
+                    var char = text[i];
+                    var nextChar = text[i + 1] || '';
+
+                    if (char === '"') {
+                        if (inQuotes && nextChar === '"') {
+                            currentField += '"';
+                            i++;
+                        } else {
+                            inQuotes = !inQuotes;
+                        }
+                    } else if (char === ',' && !inQuotes) {
+                        currentRow.push(currentField.trim());
+                        currentField = '';
+                    } else if ((char === '\n' || (char === '\r' && nextChar === '\n')) && !inQuotes) {
+                        if (char === '\r') i++;
+                        currentRow.push(currentField.trim());
+                        if (currentRow.length > 1 || currentRow[0] !== '') rows.push(currentRow);
+                        currentRow = [];
+                        currentField = '';
+                    } else if (char === '\r' && !inQuotes) {
+                        currentRow.push(currentField.trim());
+                        if (currentRow.length > 1 || currentRow[0] !== '') rows.push(currentRow);
+                        currentRow = [];
+                        currentField = '';
+                    } else {
+                        currentField += char;
+                    }
+                }
+                if (currentField || currentRow.length > 0) {
+                    currentRow.push(currentField.trim());
+                    if (currentRow.length > 1 || currentRow[0] !== '') rows.push(currentRow);
+                }
+
+                if (rows.length === 0) return { headers: [], data: [] };
+                var headers = rows[0].map(function(h) { return h.toLowerCase().trim(); });
+                var data = [];
+                for (var j = 1; j < rows.length; j++) {
+                    var row = {};
+                    headers.forEach(function(h, idx) { row[h] = rows[j][idx] || ''; });
+                    data.push(row);
+                }
+                return { headers: headers, data: data };
+            }
+
+            function findColumn(row, names) {
+                for (var i = 0; i < names.length; i++) {
+                    var key = names[i].toLowerCase();
+                    if (row[key] !== undefined && row[key] !== '') return row[key];
+                }
+                return '';
+            }
+
+            var companyMap = {};
+
+            try {
+                if (compFile) {
+                    logDiv.innerHTML += 'Läser företag...<br>';
+                    var text = await compFile.text();
+                    var parsed = parseCSV(text);
+                    logDiv.innerHTML += 'Hittade ' + parsed.data.length + ' rader<br>';
+
+                    var imported = 0;
+                    for (var i = 0; i < parsed.data.length; i++) {
+                        var row = parsed.data[i];
+                        var name = findColumn(row, ['namn', 'name', 'organization', 'company']);
+                        if (!name) continue;
+                        var result = await supabase.from('companies').insert([{ name: name }]).select();
+                        if (!result.error && result.data && result.data[0]) {
+                            companyMap[name.toLowerCase()] = result.data[0].id;
+                            imported++;
+                        }
+                    }
+                    logDiv.innerHTML += 'Importerade ' + imported + ' företag<br>';
+                }
+
+                await loadCompanies();
+                companies.forEach(function(c) { companyMap[c.name.toLowerCase()] = c.id; });
+
+                if (dealFile) {
+                    logDiv.innerHTML += 'Läser affärer...<br>';
+                    var textD = await dealFile.text();
+                    var parsedD = parseCSV(textD);
+                    logDiv.innerHTML += 'Hittade ' + parsedD.data.length + ' rader<br>';
+
+                    var importedDeals = 0;
+                    for (var j = 0; j < parsedD.data.length; j++) {
+                        var rowD = parsedD.data[j];
+                        var nameD = findColumn(rowD, ['namn', 'title', 'deal', 'name']);
+                        if (!nameD) continue;
+
+                        var orgName = findColumn(rowD, ['organisation', 'organization', 'company']);
+                        var companyId = orgName ? companyMap[orgName.toLowerCase()] : null;
+                        var valueStr = findColumn(rowD, ['värde', 'varde', 'value', 'amount']);
+                        var value = parseFloat((valueStr || '0').replace(/[^0-9.-]/g, '')) || null;
+
+                        var statusRaw = findColumn(rowD, ['status']);
+                        var statusLower = (statusRaw || '').toLowerCase();
+                        if (statusLower.includes('won') || statusLower.includes('vunnen') || statusLower.includes('lost') || statusLower.includes('förlorad')) {
+                            continue;
+                        }
+
+                        var stageRaw = findColumn(rowD, ['fas', 'stage', 'steg']);
+                        var stageName = 'Bubblare';
+                        if (stageRaw.toLowerCase().includes('prospekt')) stageName = 'Prospekt';
+                        else if (stageRaw.toLowerCase().includes('konsult')) stageName = 'Konsult presenterad';
+                        else if (stageRaw.toLowerCase().includes('intervju') || stageRaw.toLowerCase().includes('presentation')) stageName = 'Intervju/presentation genomförd';
+
+                        var res = await supabase.from('deals').insert([{
+                            name: nameD,
+                            value: value,
+                            stage: stageName,
+                            pipeline: 'Moment',
+                            deal_status: 'open',
+                            status: 'open',
+                            company_id: companyId
+                        }]);
+                        if (!res.error) importedDeals++;
+                    }
+                    logDiv.innerHTML += 'Importerade ' + importedDeals + ' affärer<br>';
+                }
+
+                if (contactFile) {
+                    logDiv.innerHTML += 'Läser kontakter...<br>';
+                    var textC = await contactFile.text();
+                    var parsedC = parseCSV(textC);
+                    logDiv.innerHTML += 'Hittade ' + parsedC.data.length + ' rader<br>';
+
+                    var importedContacts = 0;
+                    for (var k = 0; k < parsedC.data.length; k++) {
+                        var rowC = parsedC.data[k];
+                        var nameC = findColumn(rowC, ['name', 'namn', 'person name', 'full name']);
+                        if (!nameC) {
+                            var fn = findColumn(rowC, ['first name', 'förnamn']);
+                            var ln = findColumn(rowC, ['last name', 'efternamn']);
+                            nameC = (fn && ln) ? (fn + ' ' + ln) : (fn || ln || '');
+                        }
+                        if (!nameC) continue;
+
+                        var email = findColumn(rowC, ['email', 'e-mail', 'e-post']);
+                        var phone = findColumn(rowC, ['phone', 'telefon', 'mobile']);
+                        var org = findColumn(rowC, ['org name', 'organization', 'company', 'företag']);
+                        var cId = org ? companyMap[org.toLowerCase()] : null;
+
+                        var res = await supabase.from('contacts').insert([{
+                            name: nameC,
+                            email: email || null,
+                            phone: phone || null,
+                            company_id: cId
+                        }]);
+                        if (!res.error) importedContacts++;
+                    }
+                    logDiv.innerHTML += 'Importerade ' + importedContacts + ' kontakter<br>';
+                }
+
+                logDiv.innerHTML += '<br><strong>KLAR!</strong>';
+                await loadDeals();
+                await loadContacts();
+                showToast('Import klar', 'success');
+
+            } catch (e) {
+                logDiv.innerHTML += '<span class="text-red-700">Fel: ' + (e && e.message ? e.message : e) + '</span><br>';
+            }
+        };
+
+        // =====================
+        // =====================
+        // Init App (after login)
+        // =====================
+        var appInitialized = false;
+
+        function initApp() {
+            if (appInitialized) return; // Prevent double init
+            appInitialized = true;
+
+            debug('Initierar app...');
+            showLoading();
+            Promise.all([loadCompanies(), loadDeals(), loadPipelinesAndStages()])
+                .then(function() {
+                    hideLoading();
+                    debug('Klar!');
+                })
+                .catch(function(e) {
+                    hideLoading();
+                    debug('Init fel: ' + e.message);
+                });
+        }
+
+        // =====================
+        // Start: Check Auth
+        // =====================
+        debug('Kollar inloggning...');
+        checkAuth();
+
+    })();
+    </script>
+</body>
+</html>
